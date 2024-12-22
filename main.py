@@ -18,7 +18,7 @@ def truncate_token(token):
 logger.remove()
 logger.add(lambda msg: print(msg, end=''), format="{message}", level="INFO")
 
-PING_INTERVAL = 15
+PING_INTERVAL = 60
 RETRIES = 10
 
 DOMAIN_API = {
@@ -41,6 +41,18 @@ scraper = cloudscraper.create_scraper(
         'desktop': True
     }
 )
+
+class ApiEndpoints:
+    BASE_URL = "https://api.nodepay.ai/api"
+
+    @classmethod
+    def get_url(cls, endpoint: str) -> str:
+        return f"{cls.BASE_URL}/{endpoint}"
+
+class Auth:
+    REGISTER = "auth/register"
+    LOGIN = "auth/login"
+    ACTIVATE = "auth/active-account"
 
 class AccountData:
     def __init__(self, token, proxies, index):
@@ -120,19 +132,46 @@ async def execute_request(url, data, account, proxy=None):
 
     return response.json()
 
+async def activate_account(account, proxy=None):
+    """
+    Activate the account using the activation endpoint.
+    """
+    url = ApiEndpoints.get_url(Auth.ACTIVATE)
+    data = {}
+
+    try:
+        response = await execute_request(url, data, account, proxy)
+        if response.get("code") == 0:
+            logger.info(f"{Fore.GREEN}Account activated successfully for token {truncate_token(account.token)}{Style.RESET_ALL}")
+        else:
+            logger.warning(f"{Fore.RED}Account activation failed for token {truncate_token(account.token)}: {response.get('message', 'Unknown error')}{Style.RESET_ALL}")
+    except Exception as e:
+        logger.error(f"{Fore.RED}Failed to activate account for token {truncate_token(account.token)}: {e}{Style.RESET_ALL}")
+
 async def start_ping(account, proxies, browser_ids):
     try:
         proxy_count = len(proxies) if proxies else 1
         proxy_index = 0
 
+        proxy = proxies[proxy_index] if proxies else None
+        browser_id = browser_ids[proxy_index] if proxies else browser_ids[0]
+
+        logger.info(f"{Fore.CYAN}[{time.strftime('%H:%M:%S')}][{account.index}]{Style.RESET_ALL} Starting initial ping for token {Fore.CYAN}{truncate_token(account.token)}{Style.RESET_ALL} with proxy {proxy}")
+
+        try:
+            await perform_ping(account, proxy, browser_id)
+        except Exception as e:
+            logger.error(f"{Fore.RED}Initial ping failed for token {truncate_token(account.token)} using proxy {proxy}: {e}{Style.RESET_ALL}")
+
         while True:
+            await asyncio.sleep(PING_INTERVAL)
+
             proxy = proxies[proxy_index] if proxies else None
             browser_id = browser_ids[proxy_index] if proxies else browser_ids[0]
 
             logger.info(f"{Fore.CYAN}[{time.strftime('%H:%M:%S')}][{account.index}]{Style.RESET_ALL} Starting ping for token {Fore.CYAN}{truncate_token(account.token)}{Style.RESET_ALL} with proxy {proxy}")
 
             try:
-                await asyncio.sleep(PING_INTERVAL)
                 await perform_ping(account, proxy, browser_id)
             except Exception as e:
                 logger.error(f"{Fore.RED}Ping failed for token {truncate_token(account.token)} using proxy {proxy}: {e}{Style.RESET_ALL}")
@@ -206,11 +245,12 @@ async def collect_profile_info(account):
     except Exception as e:
         logger.error(f"Error in collect_profile_info for token {truncate_token(account.token)}: {e}")
 
-async def process_account(token, proxies, index):
+async def register_and_activate_account(token, proxies, index):
     """
-    Process a single account: Initialize proxies and start asyncio event loop for this account.
+    Register and activate a single account.
     """
     account = AccountData(token, proxies, index)
+    await activate_account(account, proxies[0] if proxies else None)
     await collect_profile_info(account)
 
 async def main():
@@ -227,11 +267,18 @@ async def main():
             logger.error("Invalid input. Please enter a number.")
             return
 
+    activate_accounts = input(f"{Fore.YELLOW}Do you want to activate accounts after registration? (y/n): {Style.RESET_ALL}").strip().lower() == 'y'
+
     tasks = []
     for index, token in enumerate(tokens, start=1):
         start_index = (index - 1) * proxies_per_account
         assigned_proxies = proxies[start_index:start_index + proxies_per_account] if use_proxies else []
-        tasks.append(process_account(token, assigned_proxies, index))
+
+        if activate_accounts:
+            tasks.append(register_and_activate_account(token, assigned_proxies, index))
+        else:
+            account = AccountData(token, assigned_proxies, index)
+            tasks.append(collect_profile_info(account))
 
     try:
         await asyncio.gather(*tasks)
