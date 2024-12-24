@@ -18,14 +18,22 @@ def truncate_token(token):
 logger.remove()
 logger.add(lambda msg: print(msg, end=''), format="{message}", level="INFO")
 
-PING_INTERVAL = 60
+PING_INTERVAL = 900
 RETRIES = 10
+MISSION_INTERVAL = 12 * 3600
 
 DOMAIN_API = {
     "SESSION": "http://api.nodepay.ai/api/auth/session",
     "PING": [
         "https://nw.nodepay.org/api/network/ping"
-    ]
+    ],
+    "MISSION": "https://api.nodepay.org/api/mission/complete-mission",
+    "SURVEY_1": "https://api.nodepay.org/api/mission/survey/qna-challenge",
+    "SURVEY_2": "https://api.nodepay.org/api/mission/survey/qna-challenge-2",
+    "SURVEY_3": "https://api.nodepay.org/api/mission/survey/qna-challenge-3",
+    "SURVEY_4": "https://api.nodepay.org/api/mission/survey/qna-challenge-4",
+    "MEDAL_ALL": "https://api.nodepay.org/api/medal/all",
+    "MEDAL_CLAIM": "https://api.nodepay.org/api/medal/claim"
 }
 
 CONNECTION_STATES = {
@@ -63,6 +71,8 @@ class AccountData:
         self.account_info = {}
         self.retries = 0
         self.last_ping_status = 'Waiting...'
+        self.activation_failed = False
+        self.last_mission_time = 0
         self.browser_ids = [
             {
                 'ping_count': 0,
@@ -104,7 +114,7 @@ async def retrieve_proxies():
         logger.error(f"Failed to load proxies: {e}")
         raise SystemExit("Exiting due to failure in loading proxies")
 
-async def execute_request(url, data, account, proxy=None):
+async def execute_request(url, data, account, proxy=None, method='POST'):
     headers = {
         "Authorization": f"Bearer {account.token}",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
@@ -124,7 +134,10 @@ async def execute_request(url, data, account, proxy=None):
     proxy_config = {"http": proxy, "https": proxy} if proxy else None
 
     try:
-        response = scraper.post(url, json=data, headers=headers, proxies=proxy_config, timeout=60)
+        if method == 'POST':
+            response = scraper.post(url, json=data, headers=headers, proxies=proxy_config, timeout=60)
+        else:
+            response = scraper.get(url, headers=headers, proxies=proxy_config, timeout=60)
         response.raise_for_status()
     except Exception as e:
         logger.error(f"{Fore.RED}Error during API call for token {truncate_token(account.token)} with proxy {proxy}: {e}{Style.RESET_ALL}")
@@ -136,8 +149,12 @@ async def activate_account(account, proxy=None):
     """
     Activate the account using the activation endpoint.
     """
+    if account.activation_failed:
+        logger.info(f"{Fore.YELLOW}Skipping activation for token {truncate_token(account.token)} as it previously failed.{Style.RESET_ALL}")
+        return
+
     url = ApiEndpoints.get_url(Auth.ACTIVATE)
-    data = {}
+    data = {}  # Add any necessary data for activation if required
 
     try:
         response = await execute_request(url, data, account, proxy)
@@ -145,8 +162,32 @@ async def activate_account(account, proxy=None):
             logger.info(f"{Fore.GREEN}Account activated successfully for token {truncate_token(account.token)}{Style.RESET_ALL}")
         else:
             logger.warning(f"{Fore.RED}Account activation failed for token {truncate_token(account.token)}: {response.get('message', 'Unknown error')}{Style.RESET_ALL}")
+            account.activation_failed = True
     except Exception as e:
         logger.error(f"{Fore.RED}Failed to activate account for token {truncate_token(account.token)}: {e}{Style.RESET_ALL}")
+        account.activation_failed = True
+
+async def complete_mission(account, proxy=None):
+    """
+    Complete the daily login and quest mission.
+    """
+    current_time = time.time()
+    if current_time - account.last_mission_time < MISSION_INTERVAL:
+        logger.info(f"{Fore.YELLOW}Skipping mission for token {truncate_token(account.token)} as it was completed recently.{Style.RESET_ALL}")
+        return
+
+    url = DOMAIN_API["MISSION"]
+    data = {"mission_id": "1"}
+
+    try:
+        response = await execute_request(url, data, account, proxy)
+        if response.get("code") == 0:
+            logger.info(f"{Fore.GREEN}Mission completed successfully for token {truncate_token(account.token)}{Style.RESET_ALL}")
+            account.last_mission_time = current_time
+        else:
+            logger.warning(f"{Fore.RED}Mission completion failed for token {truncate_token(account.token)}: {response.get('message', 'Unknown error')}{Style.RESET_ALL}")
+    except Exception as e:
+        logger.error(f"{Fore.RED}Failed to complete mission for token {truncate_token(account.token)}: {e}{Style.RESET_ALL}")
 
 async def start_ping(account, proxies, browser_ids):
     try:
@@ -245,13 +286,115 @@ async def collect_profile_info(account):
     except Exception as e:
         logger.error(f"Error in collect_profile_info for token {truncate_token(account.token)}: {e}")
 
-async def register_and_activate_account(token, proxies, index):
+async def complete_survey(account, proxy=None):
+    """
+    Complete the surveys and claim rewards.
+    """
+    surveys = [
+        {
+            "url": DOMAIN_API["SURVEY_1"],
+            "payload": {"is_new_in_web3": False, "location": "Indonesia", "gender": "male", "occupation": "Marketing Manager", "industry": "Retail", "age_range": "BETWEEN_18_24"},
+            "mission_id": "8"
+        },
+        {
+            "url": DOMAIN_API["SURVEY_2"],
+            "payload": {"web3_experience": "MORE_THAN_1_YEAR", "exchange": "BOTH", "trading_frequency": "YES"},
+            "mission_id": "20"
+        },
+        {
+            "url": DOMAIN_API["SURVEY_3"],
+            "payload": {
+                "search_tool": ["X", "DISCORD", "TELEGRAM"],
+                "verification_frequency": "A_FEW_TIMES_PER_WEEK",
+                "research_type": "NEWS_AND_UPDATES",
+                "search_frustration": "HARD_TO_VERIFY_CURRENCY",
+                "real_time_importance": "EXTREMELY_IMPORTANT",
+                "switch_feature": ["TOKEN_UNLOCK_ALERTS", "SMART_CONTRACT_VERIFICATION", "SCAM_CHECK"],
+                "verification_step": "check the smart contract and project info",
+                "time_sensitive_info": ["TEAM_UPDATES", "PRICE_MOVEMENTS", "COMMUNITY_SENTIMENT"],
+                "result_format": "DETAILED_ANALYSIS",
+                "ideal_search_tool": "More detailed about team info and project"
+            },
+            "mission_id": "21"
+        },
+        {
+            "url": DOMAIN_API["SURVEY_4"],
+            "payload": {
+                "cex_accounts": ["BINANCE", "BYBIT", "OKX", "COINBASE", "KUCOIN"],
+                "most_used_cexs": ["BINANCE", "BYBIT", "OKX"],
+                "most_used_dex": "JUPITER",
+                "trade_frequency": "TEN_OR_MORE_TIMES_A_MONTH",
+                "country": "ID",
+                "crypto_wallets": ["PHANTOM"]
+            },
+            "mission_id": "22"
+        }
+    ]
+
+    for survey in surveys:
+        try:
+            response = await execute_request(survey["url"], survey["payload"], account, proxy)
+            if response.get("code") == 0:
+                logger.info(f"{Fore.GREEN}Survey completed successfully for token {truncate_token(account.token)}{Style.RESET_ALL}")
+                # Claim the reward
+                reward_response = await execute_request(DOMAIN_API["MISSION"], {"mission_id": survey["mission_id"]}, account, proxy)
+                if reward_response.get("code") == 0:
+                    logger.info(f"{Fore.GREEN}Reward claimed successfully for survey {survey['mission_id']} for token {truncate_token(account.token)}{Style.RESET_ALL}")
+                else:
+                    logger.warning(f"{Fore.RED}Reward claim failed for survey {survey['mission_id']} for token {truncate_token(account.token)}: {reward_response.get('message', 'Unknown error')}{Style.RESET_ALL}")
+            else:
+                logger.warning(f"{Fore.RED}Survey failed for token {truncate_token(account.token)}: {response.get('message', 'Unknown error')}{Style.RESET_ALL}")
+        except Exception as e:
+            logger.error(f"{Fore.RED}Failed to complete survey for token {truncate_token(account.token)}: {e}{Style.RESET_ALL}")
+
+async def claim_medals(account, proxy=None):
+    """
+    Retrieve all medals and attempt to claim those that are ready.
+    """
+    try:
+        response = await execute_request(DOMAIN_API["MEDAL_ALL"], {}, account, proxy, method='GET')
+        if response.get("code") == 0 and response.get("data"):
+            medals = response["data"]
+            for medal in medals:
+                if medal["status"] == "NOT_READY_TO_CLAIM":
+                    logger.info(f"{Fore.YELLOW}Medal {medal['name']} is not ready to claim for token {truncate_token(account.token)}{Style.RESET_ALL}")
+                    continue
+                if medal["status"] == "CLAIMED":
+                    logger.info(f"{Fore.YELLOW}Medal {medal['name']} already claimed for token {truncate_token(account.token)}{Style.RESET_ALL}")
+                    continue
+
+                claim_response = await execute_request(DOMAIN_API["MEDAL_CLAIM"], {"medal_id": medal["id"]}, account, proxy)
+                if claim_response.get("code") == 0:
+                    logger.info(f"{Fore.GREEN}Medal {medal['name']} claimed successfully for token {truncate_token(account.token)}{Style.RESET_ALL}")
+                else:
+                    logger.warning(f"{Fore.RED}Failed to claim medal {medal['name']} for token {truncate_token(account.token)}: {claim_response.get('message', 'Unknown error')}{Style.RESET_ALL}")
+        else:
+            logger.warning(f"{Fore.RED}Failed to retrieve medals for token {truncate_token(account.token)}: {response.get('message', 'Unknown error')}{Style.RESET_ALL}")
+    except Exception as e:
+        logger.error(f"{Fore.RED}Error retrieving medals for token {truncate_token(account.token)}: {e}{Style.RESET_ALL}")
+
+async def register_and_activate_account(token, proxies, index, operations):
     """
     Register and activate a single account.
     """
     account = AccountData(token, proxies, index)
-    await activate_account(account, proxies[0] if proxies else None)
-    await collect_profile_info(account)
+
+    if 'activation' in operations:
+        await activate_account(account, proxies[0] if proxies else None)
+
+    if 'mission' in operations:
+        await complete_mission(account, proxies[0] if proxies else None)
+
+    if 'nodeping' in operations:
+        await collect_profile_info(account)
+
+    if 'survey' in operations:
+        await complete_survey(account, proxies[0] if proxies else None)
+        logger.info(f"{Fore.CYAN}Survey tasks completed. Exiting script as surveys are one-time tasks.{Style.RESET_ALL}")
+        return
+
+    if 'medal' in operations:
+        await claim_medals(account, proxies[0] if proxies else None)
 
 async def main():
     tokens = await retrieve_tokens()
@@ -267,18 +410,38 @@ async def main():
             logger.error("Invalid input. Please enter a number.")
             return
 
-    activate_accounts = input(f"{Fore.YELLOW}Do you want to activate accounts after registration? (y/n): {Style.RESET_ALL}").strip().lower() == 'y'
+    print(f"{Fore.YELLOW}Select operations to perform:{Style.RESET_ALL}")
+    print("1. Nodeping and Daily")
+    print("2. Nodeping only")
+    print("3. Activation only")
+    print("4. Daily only")
+    print("5. Survey task")
+    print("6. Claim Medals")
+    choice = input("Enter your choice (1-6): ").strip()
+
+    operations = []
+    if choice == '1':
+        operations = ['nodeping', 'mission']
+    elif choice == '2':
+        operations = ['nodeping']
+    elif choice == '3':
+        operations = ['activation']
+    elif choice == '4':
+        operations = ['mission']
+    elif choice == '5':
+        operations = ['survey']
+    elif choice == '6':
+        operations = ['medal']
+    else:
+        logger.error("Invalid choice. Exiting.")
+        return
 
     tasks = []
     for index, token in enumerate(tokens, start=1):
         start_index = (index - 1) * proxies_per_account
         assigned_proxies = proxies[start_index:start_index + proxies_per_account] if use_proxies else []
 
-        if activate_accounts:
-            tasks.append(register_and_activate_account(token, assigned_proxies, index))
-        else:
-            account = AccountData(token, assigned_proxies, index)
-            tasks.append(collect_profile_info(account))
+        tasks.append(register_and_activate_account(token, assigned_proxies, index, operations))
 
     try:
         await asyncio.gather(*tasks)
