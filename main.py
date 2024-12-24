@@ -18,7 +18,7 @@ def truncate_token(token):
 logger.remove()
 logger.add(lambda msg: print(msg, end=''), format="{message}", level="INFO")
 
-PING_INTERVAL = 60
+PING_INTERVAL = 900
 RETRIES = 10
 MISSION_INTERVAL = 12 * 3600
 
@@ -154,7 +154,7 @@ async def activate_account(account, proxy=None):
         return
 
     url = ApiEndpoints.get_url(Auth.ACTIVATE)
-    data = {}  # Add any necessary data for activation if required
+    data = {}
 
     try:
         response = await execute_request(url, data, account, proxy)
@@ -336,7 +336,6 @@ async def complete_survey(account, proxy=None):
             response = await execute_request(survey["url"], survey["payload"], account, proxy)
             if response.get("code") == 0:
                 logger.info(f"{Fore.GREEN}Survey completed successfully for token {truncate_token(account.token)}{Style.RESET_ALL}")
-                # Claim the reward
                 reward_response = await execute_request(DOMAIN_API["MISSION"], {"mission_id": survey["mission_id"]}, account, proxy)
                 if reward_response.get("code") == 0:
                     logger.info(f"{Fore.GREEN}Reward claimed successfully for survey {survey['mission_id']} for token {truncate_token(account.token)}{Style.RESET_ALL}")
@@ -373,6 +372,28 @@ async def claim_medals(account, proxy=None):
     except Exception as e:
         logger.error(f"{Fore.RED}Error retrieving medals for token {truncate_token(account.token)}: {e}{Style.RESET_ALL}")
 
+async def retrieve_missions(account, proxy=None):
+    """
+    Retrieve all missions and attempt to claim those that are available.
+    """
+    try:
+        response = await execute_request("https://api.nodepay.org/api/mission", {}, account, proxy, method='GET')
+        if response.get("code") == 0 and response.get("data"):
+            missions = response["data"]
+            for mission in missions:
+                if mission["status"] == "AVAILABLE":
+                    claim_response = await execute_request(DOMAIN_API["MISSION"], {"mission_id": mission["id"]}, account, proxy)
+                    if claim_response.get("code") == 0:
+                        logger.info(f"{Fore.GREEN}Mission {mission['title']} claimed successfully for token {truncate_token(account.token)}{Style.RESET_ALL}")
+                    else:
+                        logger.warning(f"{Fore.RED}Failed to claim mission {mission['title']} for token {truncate_token(account.token)}: {claim_response.get('message', 'Unknown error')}{Style.RESET_ALL}")
+                else:
+                    logger.info(f"{Fore.YELLOW}Mission {mission['title']} is not available for claiming for token {truncate_token(account.token)}{Style.RESET_ALL}")
+        else:
+            logger.warning(f"{Fore.RED}Failed to retrieve missions for token {truncate_token(account.token)}: {response.get('message', 'Unknown error')}{Style.RESET_ALL}")
+    except Exception as e:
+        logger.error(f"{Fore.RED}Error retrieving missions for token {truncate_token(account.token)}: {e}{Style.RESET_ALL}")
+
 async def register_and_activate_account(token, proxies, index, operations):
     """
     Register and activate a single account.
@@ -396,6 +417,9 @@ async def register_and_activate_account(token, proxies, index, operations):
     if 'medal' in operations:
         await claim_medals(account, proxies[0] if proxies else None)
 
+    if 'mission_claim' in operations:
+        await retrieve_missions(account, proxies[0] if proxies else None)
+
 async def main():
     tokens = await retrieve_tokens()
     proxies = await retrieve_proxies()
@@ -417,7 +441,8 @@ async def main():
     print("4. Daily only")
     print("5. Survey task")
     print("6. Claim Medals")
-    choice = input("Enter your choice (1-6): ").strip()
+    print("7. Mission Claim")
+    choice = input("Enter your choice (1-7): ").strip()
 
     operations = []
     if choice == '1':
@@ -432,6 +457,8 @@ async def main():
         operations = ['survey']
     elif choice == '6':
         operations = ['medal']
+    elif choice == '7':
+        operations = ['mission_claim']
     else:
         logger.error("Invalid choice. Exiting.")
         return
