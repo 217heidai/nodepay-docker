@@ -18,7 +18,7 @@ def truncate_token(token):
 logger.remove()
 logger.add(lambda msg: print(msg, end=''), format="{message}", level="INFO")
 
-PING_INTERVAL = 900
+PING_INTERVAL = 60
 RETRIES = 10
 MISSION_INTERVAL = 12 * 3600
 
