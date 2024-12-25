@@ -424,7 +424,7 @@ async def main():
     tokens = await retrieve_tokens()
     proxies = await retrieve_proxies()
 
-    use_proxies = input(f"{Fore.YELLOW}Do you want to use proxies? (y/n): {Style.RESET_ALL}").strip().lower() == 'y'
+    use_proxies = False
     proxies_per_account = 0
 
     if use_proxies:
@@ -442,7 +442,7 @@ async def main():
     print("5. Survey task")
     print("6. Claim Medals")
     print("7. Mission Claim")
-    choice = input("Enter your choice (1-7): ").strip()
+    choice = '2'
 
     operations = []
     if choice == '1':
